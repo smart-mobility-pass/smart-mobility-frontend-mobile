@@ -37,6 +37,9 @@ yarn-error.*
 *.tsbuildinfo
 
 app-example
+smart-mobility-frontend-mobile.iml
+.idea
+.vscode
 
 # generated native folders
 /ios
