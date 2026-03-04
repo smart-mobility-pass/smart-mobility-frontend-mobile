@@ -4,14 +4,26 @@ import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, SafeAreaView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Button } from '../components/Button';
 import { Colors } from '../constants/Colors';
+import { useAuth } from '../context/AuthContext';
 
 export default function LoginScreen() {
     const router = useRouter();
+    const { login, isAuthenticated, isLoading } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
 
-    const handleLogin = () => {
-        router.replace('/(tabs)');
+    React.useEffect(() => {
+        if (isAuthenticated) {
+            router.replace('/(tabs)');
+        }
+    }, [isAuthenticated]);
+
+    const handleLogin = async () => {
+        try {
+            await login();
+        } catch (error) {
+            console.error("Login failed", error);
+        }
     };
 
     return (
