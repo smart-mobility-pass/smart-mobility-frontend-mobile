@@ -44,3 +44,4 @@ smart-mobility-frontend-mobile.iml
 # generated native folders
 /ios
 /android
+/.vscode/
