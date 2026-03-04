@@ -1,11 +1,10 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { Bell, Bus, Info, LayoutGrid, Plus, Route, Search, Train, Wallet, Zap } from 'lucide-react-native';
+import { Bell, Bus, Info, ArrowRight, Plus, Route, Search, Train, Wallet, Zap, Clock, Banknote } from 'lucide-react-native';
 import React, { useEffect, useRef, useState } from 'react';
-import { Dimensions, FlatList, Image, NativeScrollEvent, NativeSyntheticEvent, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { TransportCard } from '../../components/TransportCard';
+import { Dimensions, FlatList, Image, NativeScrollEvent, NativeSyntheticEvent, SafeAreaView, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View, RefreshControl } from 'react-native';
 import { Colors } from '../../constants/Colors';
-import { UserService } from '../../services/api';
+import { BillingService, JourneyService, UserService } from '../../services/api';
 
 const { width } = Dimensions.get('window');
 const SLIDER_WIDTH = width - 48;
@@ -34,26 +33,84 @@ const ADVERTISEMENTS = [
   }
 ];
 
+import { useAuth } from '../../context/AuthContext';
+
 export default function HomeScreen() {
   const router = useRouter();
-  const [user, setUser] = useState({ name: 'Modou Sarr', balance: 15450, trips: 189 });
-  const [loading, setLoading] = useState(true);
+  const { user, isLoading: authLoading } = useAuth();
   const [activeSlide, setActiveSlide] = useState(0);
   const flatListRef = useRef<FlatList>(null);
 
+  // States
+  const [balance, setBalance] = useState<number>(0);
+  const [summary, setSummary] = useState<any>(null);
+  const [dailySpent, setDailySpent] = useState<number>(0);
+  const [tripsToday, setTripsToday] = useState<number>(0);
+  const [activeTrip, setActiveTrip] = useState<any>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const displayUser = {
+    name: user ? `${user.firstName} ${user.lastName}` : 'Utilisateur',
+  };
+
   useEffect(() => {
-    const fetchUser = async () => {
+    const fetchData = async () => {
+      if (!user || authLoading) return;
       try {
-        const data = await UserService.getProfile('user_id_123');
-        if (data) setUser(data);
-      } catch (err) {
-        console.error("Home: fetch user failed", err);
-      } finally {
-        setLoading(false);
+        // Fetch financial data from Billing-Service
+        const acct = await BillingService.getAccount(user.id);
+        setBalance(acct.balance || 0);
+        setDailySpent(acct.dailySpent || 0);
+
+        // Fetch Summary from User-Service (Daily Cap, Active Pass, Subs)
+        const userSummary = await UserService.getSummary(user.id);
+        setSummary(userSummary);
+
+        // Fetch Today's trips count
+        const history = await JourneyService.getHistory(user.id);
+        const today = new Date().toISOString().split('T')[0];
+        const count = (history || []).filter((t: any) => t.startTime && t.startTime.startsWith(today)).length;
+        setTripsToday(count || 0);
+
+        // Fetch active trip from Trip-Management
+        const trip = await JourneyService.getActiveJourney(user.id);
+        setActiveTrip(trip && trip.id ? trip : null);
+      } catch (error) {
+        console.error("Home: Failed to fetch dashboard data", error);
       }
     };
-    fetchUser();
-  }, []);
+    fetchData();
+
+    // Polling every 15s
+    const dataInterval = setInterval(fetchData, 15000);
+    return () => clearInterval(dataInterval);
+  }, [user, authLoading]);
+
+  const onRefresh = React.useCallback(() => {
+    setRefreshing(true);
+    const fetchData = async () => {
+      if (!user) return;
+      try {
+        const acct = await BillingService.getAccount(user.id);
+        setBalance(acct.balance || 0);
+        setDailySpent(acct.dailySpent || 0);
+        const userSummary = await UserService.getSummary(user.id);
+        setSummary(userSummary);
+        const history = await JourneyService.getHistory(user.id);
+        const today = new Date().toISOString().split('T')[0];
+        const count = (history || []).filter((t: any) => t.startTime && t.startTime.startsWith(today)).length;
+        setTripsToday(count || 0);
+        const trip = await JourneyService.getActiveJourney(user.id);
+        setActiveTrip(trip && trip.id ? trip : null);
+      } catch (error) {
+        console.error("Home: Failed refresh", error);
+      } finally {
+        setRefreshing(false);
+      }
+    };
+    fetchData();
+  }, [user]);
+
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -95,7 +152,13 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <ScrollView showsVerticalScrollIndicator={false} bounces={true}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        bounces={true}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[Colors.primary]} tintColor={Colors.white} />
+        }
+      >
 
         {/* Header Smart Mobility */}
         <View style={styles.header}>
@@ -109,6 +172,9 @@ export default function HomeScreen() {
                 <Text style={styles.logoTextBold}>Mobility</Text>
               </View>
             </View>
+            <TouchableOpacity style={styles.notifBtn} onPress={() => router.push('/pricing_info')}>
+              <Info size={22} color={Colors.white} />
+            </TouchableOpacity>
             <TouchableOpacity style={styles.notifBtn} onPress={() => router.push('/notifications')}>
               <Bell size={22} color={Colors.white} />
               <View style={styles.notifDot} />
@@ -117,52 +183,77 @@ export default function HomeScreen() {
 
           {/* Salutation & Recherche */}
           <View style={styles.greetingContainer}>
-            <Text style={styles.welcomeText}>Bonjour, {loading ? '...' : user.name.split(' ')[0]}</Text>
+            <Text style={styles.welcomeText}>Bonjour, {authLoading ? '...' : displayUser.name.split(' ')[0]}</Text>
             <Text style={styles.whereToText}>Où allons-nous aujourd'hui ?</Text>
           </View>
 
-          <View style={styles.searchContainer}>
-            <Search size={18} color={Colors.textSecondary} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Rechercher une destination..."
-              placeholderTextColor={Colors.textSecondary}
-            />
-          </View>
         </View>
 
-        {/* Portefeuille & Voyages MIS EN AVANT */}
+        {/* Portefeuille & Dépenses - Redesigned for better spacing */}
         <View style={styles.statsWrapper}>
           <View style={styles.mainStatsCard}>
-            <View style={styles.balanceInfo}>
-              <View style={styles.statIconBox}>
-                <Wallet size={20} color={Colors.primary} />
+            <View style={styles.statsHeader}>
+              <View style={styles.balanceInfo}>
+                <View style={styles.statIconBox}>
+                  <Wallet size={20} color={Colors.primary} />
+                </View>
+                <View>
+                  <Text style={styles.statLabelMain}>Plafond (Cap)</Text>
+                  <Text style={[styles.statValueMain, styles.balanceValue]}>{authLoading ? '...' : (summary?.dailyCap || 2500).toLocaleString('fr-FR')} F</Text>
+                </View>
               </View>
-              <View>
-                <Text style={styles.statLabelMain}>Votre Solde</Text>
-                <Text style={[styles.statValueMain, styles.balanceValue]}>{loading ? '...' : user.balance.toLocaleString('fr-FR')} F</Text>
-              </View>
+              <TouchableOpacity style={styles.topUpBtnLarge} onPress={() => router.push('/recharge')}>
+                <Plus size={20} color={Colors.white} />
+                <Text style={styles.topUpBtnText}>Recharger</Text>
+              </TouchableOpacity>
             </View>
 
-            <View style={styles.mainDivider} />
+            <View style={styles.mainDividerHorizontal} />
 
-            <View style={styles.tripInfo}>
-              <View style={styles.statIconBoxLight}>
-                <Route size={20} color="#FF9933" />
+            <View style={styles.statsFooter}>
+              <View style={styles.tripInfo}>
+                <View style={styles.statIconBoxLight}>
+                  <Banknote size={20} color="#FF9933" />
+                </View>
+                <View>
+                  <Text style={styles.statLabelMain}>Dépense (Today)</Text>
+                  <Text style={styles.statValueMain}>{authLoading ? '...' : dailySpent.toLocaleString('fr-FR')} F</Text>
+                </View>
               </View>
-              <View>
-                <Text style={styles.statLabelMain}>Trajets</Text>
-                <Text style={styles.statValueMain}>{loading ? '...' : user.trips}</Text>
+
+              <View style={styles.statDividerVertical} />
+
+              <View style={styles.tripCountInfo}>
+                <View style={styles.statIconBoxTrips}>
+                  <Route size={20} color="#10B981" />
+                </View>
+                <View>
+                  <Text style={styles.statLabelMain}>Trajets</Text>
+                  <Text style={styles.statValueMain}>{authLoading ? '...' : tripsToday}</Text>
+                </View>
               </View>
             </View>
-
-            <TouchableOpacity style={styles.topUpBtn} onPress={() => router.push('/renew')}>
-              <Plus size={20} color={Colors.white} />
-            </TouchableOpacity>
           </View>
         </View>
 
         <View style={styles.content}>
+
+          {activeTrip && (
+            <TouchableOpacity activeOpacity={0.8} style={styles.activeTripBanner} onPress={() => router.push('/explore')}>
+              <View style={styles.activeTripIcon}>
+                <Clock size={24} color={Colors.white} />
+              </View>
+              <View style={styles.activeTripContent}>
+                <Text style={styles.activeTripTitle}>Trajet en Cours</Text>
+                <Text style={styles.activeTripDesc}>Ligne n°{activeTrip.transportLineId} • Départ: {activeTrip.startLocation}</Text>
+              </View>
+              <View style={styles.activeTripAction}>
+                <Text style={styles.activeTripActionText}>TERMINER</Text>
+                <ArrowRight size={16} color={Colors.white} />
+              </View>
+            </TouchableOpacity>
+          )}
+
           <View style={styles.carouselContainer}>
             <FlatList
               ref={flatListRef}
@@ -190,34 +281,41 @@ export default function HomeScreen() {
             </View>
           </View>
 
-          <View style={styles.selectionTitleContainer}>
-            <Text style={styles.sectionTitle}>Types de transport</Text>
-            <LayoutGrid size={18} color={Colors.primary} />
-          </View>
+          {/* Active Pass & Subscriptions Section */}
+          {(summary?.hasActivePass || (summary?.activeSubscriptions && summary.activeSubscriptions.length > 0)) && (
+            <View style={styles.perksContainer}>
+              <View style={styles.selectionTitleContainer}>
+                <Text style={styles.sectionTitle}>Mes Avantages Actifs</Text>
+              </View>
 
-          <TransportCard
-            title="Sénégal Dem Dikk"
-            description="Toutes les lignes urbaines"
-            icon={Bus}
-            onPress={() => router.push({ pathname: '/voyage_control', params: { type: 'bus' } })}
-            color="#47A0C7"
-          />
+              {summary.hasActivePass && (
+                <LinearGradient colors={['#6366F1', '#4F46E5']} style={styles.perkCard}>
+                  <Zap size={24} color={Colors.white} />
+                  <View style={styles.perkContent}>
+                    <Text style={styles.perkTitle}>Pass Mobilité Actif</Text>
+                    <Text style={styles.perkDesc}>{summary.passType} • Statut: {summary.passStatus}</Text>
+                  </View>
+                  <View style={styles.perkBadge}>
+                    <Text style={styles.perkBadgeText}>ILLIMITÉ</Text>
+                  </View>
+                </LinearGradient>
+              )}
 
-          <TransportCard
-            title="BRT Rapide"
-            description="Le moyen le plus efficace"
-            icon={Zap}
-            onPress={() => router.push({ pathname: '/voyage_control', params: { type: 'brt' } })}
-            color="#FF5733"
-          />
+              {summary.activeSubscriptions?.map((sub: any, idx: number) => (
+                <LinearGradient key={idx} colors={['#EC4899', '#DB2777']} style={styles.perkCard}>
+                  <Train size={24} color={Colors.white} />
+                  <View style={styles.perkContent}>
+                    <Text style={styles.perkTitle}>{sub.offerName}</Text>
+                    <Text style={styles.perkDesc}>{sub.subscriptionType} • -{sub.discountPercentage}% sur {sub.applicableTransport}</Text>
+                  </View>
+                  <View style={styles.perkBadge}>
+                    <Text style={styles.perkBadgeText}>ACTIF</Text>
+                  </View>
+                </LinearGradient>
+              ))}
+            </View>
+          )}
 
-          <TransportCard
-            title="TER Express"
-            description="Dakar - Diamniadio • 45 min"
-            icon={Train}
-            onPress={() => router.push({ pathname: '/voyage_control', params: { type: 'ter' } })}
-            color="#0F56B3"
-          />
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -305,38 +403,42 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.7)',
     fontSize: 14,
   },
-  searchContainer: {
-    backgroundColor: Colors.white,
-    borderRadius: 20,
-    height: 52,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    elevation: 8,
-  },
-  searchInput: {
-    flex: 1,
-    marginLeft: 12,
-    fontSize: 15,
-    fontWeight: '500',
-    color: Colors.text,
-  },
   statsWrapper: {
     marginTop: -35,
     paddingHorizontal: 24,
   },
   mainStatsCard: {
     backgroundColor: Colors.white,
-    borderRadius: 28,
-    paddingVertical: 20,
-    paddingHorizontal: 24,
+    borderRadius: 32,
+    padding: 24,
+    elevation: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 15 },
+    shadowOpacity: 0.15,
+    shadowRadius: 30,
+  },
+  statsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  statsFooter: {
     flexDirection: 'row',
     alignItems: 'center',
-    elevation: 15,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 20 },
-    shadowOpacity: 0.1,
-    shadowRadius: 30,
+    justifyContent: 'space-between',
+    marginTop: 16,
+  },
+  mainDividerHorizontal: {
+    height: 1,
+    backgroundColor: '#F1F5F9',
+    width: '100%',
+  },
+  statDividerVertical: {
+    width: 1,
+    height: 24,
+    backgroundColor: '#F1F5F9',
+    marginHorizontal: 12,
   },
   balanceInfo: {
     flex: 1,
@@ -383,20 +485,77 @@ const styles = StyleSheet.create({
   balanceValue: {
     color: Colors.primary,
   },
-  mainDivider: {
-    width: 1,
-    height: 36,
-    backgroundColor: '#F1F5F9',
-    marginHorizontal: 8,
+  tripCountInfo: {
+    flex: 0.8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 8,
   },
-  topUpBtn: {
+  statIconBoxTrips: {
     width: 40,
     height: 40,
-    borderRadius: 14,
-    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    backgroundColor: '#ECFDF5',
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: 10,
+    marginRight: 8,
+  },
+  perksContainer: {
+    marginTop: 24,
+    marginBottom: 20,
+  },
+  perkCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 20,
+    marginBottom: 12,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+  },
+  perkContent: {
+    flex: 1,
+    marginLeft: 16,
+  },
+  perkTitle: {
+    color: Colors.white,
+    fontSize: 15,
+    fontWeight: '900',
+    marginBottom: 2,
+  },
+  perkDesc: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  perkBadge: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  perkBadgeText: {
+    color: Colors.white,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  topUpBtnLarge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.primary,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 16,
+    elevation: 4,
+  },
+  topUpBtnText: {
+    color: Colors.white,
+    fontSize: 14,
+    fontWeight: '800',
+    marginLeft: 8,
   },
   content: {
     paddingHorizontal: 24,
@@ -480,5 +639,55 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '900',
     color: Colors.text,
+  },
+  activeTripBanner: {
+    backgroundColor: Colors.primary,
+    borderRadius: 20,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+    elevation: 6,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+  },
+  activeTripIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  activeTripContent: {
+    flex: 1,
+  },
+  activeTripTitle: {
+    color: Colors.white,
+    fontSize: 16,
+    fontWeight: '900',
+    marginBottom: 4,
+  },
+  activeTripDesc: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  activeTripAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+  },
+  activeTripActionText: {
+    color: Colors.white,
+    fontSize: 12,
+    fontWeight: '900',
+    marginRight: 4,
   }
 });
